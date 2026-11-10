@@ -1,0 +1,54 @@
+[package]
+name = "nautilus-risex-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# Keeps this package out of the parent crate.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+nautilus-core = "=0.67.0"
+nautilus-model = "=0.67.0"
+nautilus-risex = { path = ".." }
+rust_decimal = "1.43.0"
+serde_json = "1.0.154"
+
+[[bin]]
+name = "pack_order"
+path = "fuzz_targets/pack_order.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "action_hash"
+path = "fuzz_targets/action_hash.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "http_parse"
+path = "fuzz_targets/http_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ws_parse"
+path = "fuzz_targets/ws_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "book_checksum"
+path = "fuzz_targets/book_checksum.rs"
+test = false
+doc = false
+bench = false

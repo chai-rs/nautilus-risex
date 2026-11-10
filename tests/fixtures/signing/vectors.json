@@ -1,0 +1,278 @@
+{
+ "domain": {
+  "name": "RISEx",
+  "version": "1",
+  "chain_id": 4153,
+  "verifying_contract": "0x0D919DAA3f12AE715744Eb648c00066c5DBd66f0"
+ },
+ "place": [
+  {
+   "market_id": 1,
+   "size_steps": 1000,
+   "price_ticks": 65000,
+   "side": 0,
+   "post_only": false,
+   "reduce_only": false,
+   "stp_mode": 0,
+   "order_type": 1,
+   "time_in_force": 0,
+   "builder_id": 0,
+   "client_order_id": 0,
+   "ttl_units": 0,
+   "order_data": "0x00000000000000400000fa003f7a0802",
+   "header_flags": 1,
+   "hash": "0x74226521a035efbc4a2b1b2d5770c80e7fc443e50fb9384ce7f04a9f8b543e02"
+  },
+  {
+   "market_id": 1,
+   "size_steps": 1,
+   "price_ticks": 1,
+   "side": 1,
+   "post_only": true,
+   "reduce_only": false,
+   "stp_mode": 0,
+   "order_type": 1,
+   "time_in_force": 0,
+   "builder_id": 0,
+   "client_order_id": 0,
+   "ttl_units": 0,
+   "order_data": "0x000000000000004000000040000048c2",
+   "header_flags": 1,
+   "hash": "0x79d2e9b4c5fb8b549804bddd424213f7c73e9f7585974a36d7bc14b81b08e5bd"
+  },
+  {
+   "market_id": 2,
+   "size_steps": 250000,
+   "price_ticks": 3100,
+   "side": 1,
+   "post_only": false,
+   "reduce_only": true,
+   "stp_mode": 1,
+   "order_type": 0,
+   "time_in_force": 3,
+   "builder_id": 0,
+   "client_order_id": 42,
+   "ttl_units": 0,
+   "order_data": "0x000000000000008000f4240003073342",
+   "header_flags": 5,
+   "hash": "0xe5163afb7f24eaca145982cd389106055b7eb97e70fcfbfb8e6515ba745ac9d1"
+  },
+  {
+   "market_id": 7,
+   "size_steps": 4294967295,
+   "price_ticks": 16777215,
+   "side": 0,
+   "post_only": true,
+   "reduce_only": true,
+   "stp_mode": 2,
+   "order_type": 1,
+   "time_in_force": 1,
+   "builder_id": 0,
+   "client_order_id": 18446744073709551615,
+   "ttl_units": 65535,
+   "order_data": "0x00000000000001ffffffffffffffdd82",
+   "header_flags": 21,
+   "hash": "0xb63f126d54b92e6af8afbdedc8e66286e74322d910819b9d600fb4d3b05b28ef"
+  },
+  {
+   "market_id": 65535,
+   "size_steps": 4294967295,
+   "price_ticks": 16777215,
+   "side": 1,
+   "post_only": true,
+   "reduce_only": true,
+   "stp_mode": 2,
+   "order_type": 1,
+   "time_in_force": 3,
+   "builder_id": 65535,
+   "client_order_id": 18446744073709551615,
+   "ttl_units": 65535,
+   "order_data": "0x00000000003ffffffffffffffffffdc2",
+   "header_flags": 23,
+   "hash": "0x546b539bbdb5604f39d8f2e08c8de280ff8c251e1f5f2a5f092b42af42e91743"
+  },
+  {
+   "market_id": 3,
+   "size_steps": 123456789,
+   "price_ticks": 9876543,
+   "side": 0,
+   "post_only": false,
+   "reduce_only": false,
+   "stp_mode": 2,
+   "order_type": 1,
+   "time_in_force": 2,
+   "builder_id": 12,
+   "client_order_id": 0,
+   "ttl_units": 0,
+   "order_data": "0x00000000000000c1d6f34565ad0fec02",
+   "header_flags": 3,
+   "hash": "0x3065b2207b61ec31e2cd16dbd7251c3b83f380f61932d96efddb95c1b4ffeb95"
+  },
+  {
+   "market_id": 4,
+   "size_steps": 5000,
+   "price_ticks": 0,
+   "side": 1,
+   "post_only": false,
+   "reduce_only": true,
+   "stp_mode": 0,
+   "order_type": 0,
+   "time_in_force": 3,
+   "builder_id": 0,
+   "client_order_id": 0,
+   "ttl_units": 0,
+   "order_data": "0x00000000000001000004e20000003142",
+   "header_flags": 1,
+   "hash": "0xb9856c188b8403e22dabc0b090f95cd2a45b24013bc0ccafc46722295f67d8bb"
+  },
+  {
+   "market_id": 5,
+   "size_steps": 77,
+   "price_ticks": 1234567,
+   "side": 0,
+   "post_only": true,
+   "reduce_only": false,
+   "stp_mode": 1,
+   "order_type": 1,
+   "time_in_force": 1,
+   "builder_id": 9,
+   "client_order_id": 1700000000123,
+   "ttl_units": 3,
+   "order_data": "0x000000000000014000001344b5a1da82",
+   "header_flags": 23,
+   "hash": "0xa3313a49fb82e396817ab419b1d3fa5c324b8582fbbb62908ddd579edf319e10"
+  }
+ ],
+ "cancel": [
+  {
+   "market_id": 1,
+   "resting_order_id": 1,
+   "hash": "0x83ca5dfd1672428c058f2b903e1924f009c7e04690460848f6a4e48fba570dbf"
+  },
+  {
+   "market_id": 1,
+   "resting_order_id": 123456789,
+   "hash": "0x7decfb2fc54b8603a134937021c7a481234558f849060478cd48e1d6eef18ab3"
+  },
+  {
+   "market_id": 2,
+   "resting_order_id": 0,
+   "hash": "0x93b058e08090ede3a705d22a334a996c5fa9f4aa2dc63419952e41ee49f737ce"
+  },
+  {
+   "market_id": 65535,
+   "resting_order_id": 1099511627775,
+   "hash": "0xb2efdd7b29d87bdaad51396c633bed916c988f769b4b91aaec4038bb280aa0f9"
+  },
+  {
+   "market_id": 7,
+   "resting_order_id": 987654321012,
+   "hash": "0xa134fa7a82108e7297daec33bcee43b76ecaeec134531dfc3cb9957bf9c23c15"
+  },
+  {
+   "market_id": 300,
+   "resting_order_id": 9223372036854775808,
+   "hash": "0x490225e4e0f85fbf0692d8393489275c6a149f403952c80513fda40106abbf5b"
+  }
+ ],
+ "cancel_all": [
+  {
+   "market_id": 0,
+   "hash": "0xddb18d9e3484b54701ebb021e3e9064fb01635efcde9cc600f924aa3378253cd"
+  },
+  {
+   "market_id": 1,
+   "hash": "0xce5240f684b9c1c8106e106e9b795df72f55a3e7c74e27cb8038b91fd3e2f4e0"
+  },
+  {
+   "market_id": 2,
+   "hash": "0x2adefd9f90cd34bc1536ad4a28e6f2665f0ff859f44fe2b09ee82944fe3cda11"
+  },
+  {
+   "market_id": 7,
+   "hash": "0x1018fd716c6106cf4fa818d4808f8dccfa69579cb1467d61ff8f5b4e22e82796"
+  },
+  {
+   "market_id": 300,
+   "hash": "0xa7e7b51536dd324ff31ac70b4e5437b5cd869f9238e413c2f2b834adae37f9d3"
+  },
+  {
+   "market_id": 65535,
+   "hash": "0x10a0bddaf09b700d68bc2e4fd5560c4bdd1cffc9f79bf3726baf66ac62ec36d5"
+  }
+ ],
+ "leverage": [
+  {
+   "market_id": 1,
+   "leverage": 1,
+   "hash": "0x5c797b9e18e8890e4645e7e541c3c4ab98401a3b7bf3276f294427c3b859eba6"
+  },
+  {
+   "market_id": 1,
+   "leverage": 20,
+   "hash": "0x309b4de169bc53c93c52cbcf366f30b1667f166fd1223122ef1a1ff2bd769119"
+  },
+  {
+   "market_id": 2,
+   "leverage": 5,
+   "hash": "0xb783755ca5686d91d078f74a1daa509d835e68b234621a9a8979119b815834c3"
+  },
+  {
+   "market_id": 7,
+   "leverage": 50,
+   "hash": "0xc03fb0b5290e5ffa3237443b811900d4cfc18e5032ad4c84d81ce9678ebd869d"
+  },
+  {
+   "market_id": 300,
+   "leverage": 100,
+   "hash": "0xe5681981332299442e35230e56ae7f977e2da6b6052417ae9179dc714c5c4b43"
+  },
+  {
+   "market_id": 65535,
+   "leverage": 255,
+   "hash": "0x8c33afa436c87a0147dcf5168101e890e2fd6e7a89a2599fa3bf4bf7049297f6"
+  }
+ ],
+ "margin_mode": [
+  {
+   "market_id": 1,
+   "margin_mode": 0,
+   "hash": "0xfbd34b2814ef64f87b906248405ccd17d2e1297dcc0028f9aa97e94bb249eede"
+  },
+  {
+   "market_id": 1,
+   "margin_mode": 1,
+   "hash": "0x447f808acbdae07c8c46502182357efa3110ed0e3b401f16c0d3d49a8fdb7b3f"
+  },
+  {
+   "market_id": 2,
+   "margin_mode": 0,
+   "hash": "0x2a2ba5e05b81a09c1630ba68eac3820cd1360977e328fa3d1f0b056c91759d82"
+  },
+  {
+   "market_id": 7,
+   "margin_mode": 1,
+   "hash": "0xb5c89e381ad084fae0d5e159e39e0c064c5807420c3747543bac889812404a68"
+  },
+  {
+   "market_id": 300,
+   "margin_mode": 0,
+   "hash": "0xfcf54ed20f0e6d962a96f85c6f63222313eb7588a3ec97b74e5a2d6833e8818d"
+  },
+  {
+   "market_id": 65535,
+   "margin_mode": 1,
+   "hash": "0x16a97489a02e565fb8c680c5d028c67fa050eb6bc815f627e5097a45e8c9b076"
+  }
+ ],
+ "digests": {
+  "verify_witness": "0xdd563802503014183cdd2d95bf3fd70ca44412a0f86e77cdc3b0e78aab2c4f41",
+  "register_signer": "0xbb94f3be8179752f1156b58d7c514b7e2ec5d46e51a6d44b64e6c06d9a9fd530",
+  "verify_signer": "0x3cb385c9d5f095da70ad30c2699ac713e64975c53f2cdf08c25b6a7ab6ec6bb6",
+  "revoke_signer": "0x1985baeadba0d1cd55a34fed5a8a4e6ada3308583afa9da792070738d1ecba56",
+  "register_v2": "0x915a58d33b977b30cb6621bb947db07e9895a9a8929cafe4191c06ac466ac55e",
+  "place_tpsl": "0xfc440fdd4d7b9b8a2b84dff4669978323f3f8e44b3987936ef98d811c4f06353",
+  "cancel_tpsl": "0x61fd60ffeb67861531b6208e5a613cb5f81e75cbeeaf816a7aba0c0f3e1675e3",
+  "cancel_all_tpsl": "0xe0a5dbdadabc27cb5ccd2d2220bd433e8cba558f6fd0fadf12e6605303596f8c"
+ }
+}

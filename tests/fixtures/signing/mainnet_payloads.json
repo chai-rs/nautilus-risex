@@ -1,0 +1,28 @@
+{
+  "_source": "RISE mainnet (chain 4153) router calldata, block 26670519, read from the public RPC on 2026-11-10. No key was used.",
+  "router": "0xaadde0cea454f2bcb26f46ed54c5709b7bb34a7e",
+  "auth": "0x0D919DAA3f12AE715744Eb648c00066c5DBd66f0",
+  "chain_id": 4153,
+  "expected_signer": "0xa13100a88652db737025e768910dea9e533c6ebb",
+  "place": {
+    "tx": "0x4e563c50cf79ce350272418cc01251c62acac1d856ffad78c3dc05c24a9b8710",
+    "payload": "250003c0000b62803615488218e68cc4434bb78536dc0d99dcaee443cebaa5fb8c11877d157c26df6af27bf0000000268ac44fcbbb9c7076b66ec0a48f98edafd80d05ca870ef7a7d04734860d1e9d14c9ab08a1936ec2380b7396efd2d77da1fc72c00bbdfc5fbb21d6f43dc995a310e45f7e",
+    "signed_flags": 5,
+    "market_id": 15,
+    "size_steps": 11658,
+    "price_ticks": 55381,
+    "client_order_id": 1794276276124235653,
+    "deadline": 1794276336,
+    "nonce_anchor": 2525892,
+    "nonce_bitmap": 79
+  },
+  "cancel": {
+    "tx": "0x9209a2460116ef1f018fa7205d287049980319859c57656e7a8687988e82927f",
+    "payload": "21002706000008aa36dc0d99dcaee443cebaa5fb8c11877d157c26df6af27bf0000000268ac3c9dcb29a7f0bd6793757b0993027d225103de504003845dba2b6d1c57b720e0ca18cb3e9876aa8c7781c0830808ea17a9fd1e2a0b9ff99df7687eb2a7fe0a1fb4f",
+    "market_id": 39,
+    "resting_order_id": 25769805994,
+    "deadline": 1794276336,
+    "nonce_anchor": 2525891,
+    "nonce_bitmap": 201
+  }
+}
