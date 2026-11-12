@@ -19,13 +19,16 @@ use nautilus_common::{
     live::runner::replace_data_event_sender,
     messages::{
         DataEvent,
-        data::{DataResponse, RequestBookSnapshot, SubscribeBookDeltas, UnsubscribeBookDeltas},
+        data::{
+            DataResponse, RequestBookSnapshot, SubscribeBookDeltas, SubscribeInstrumentStatus,
+            UnsubscribeBookDeltas,
+        },
     },
 };
 use nautilus_core::{UUID4, UnixNanos};
 use nautilus_model::{
     data::Data,
-    enums::{BookAction, BookType},
+    enums::{BookAction, BookType, MarketStatusAction},
     identifiers::{ClientId, InstrumentId},
 };
 use nautilus_risex::{config::data::RisexDataClientConfig, data::RisexDataClient};
@@ -34,6 +37,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 const MARKETS: &str = include_str!("fixtures/http/markets.json");
+const SYSTEM_CONFIG: &str = include_str!("fixtures/http/system_config.json");
 const ORDERBOOK: &str = include_str!("fixtures/http/orderbook_aero.json");
 const WS_FRAMES: &str = include_str!("fixtures/ws/public_aero_btc.jsonl");
 /// Lines of the AERO book in `WS_FRAMES`.
@@ -88,12 +92,19 @@ async fn serve_ws(mut socket: WebSocket, requests: Requests) {
     }
 }
 
-async fn start_venue() -> (RisexDataClientConfig, Requests) {
+/// The venue serves `markets` as `GET /v1/markets`: a test changes it to change a market.
+async fn start_venue() -> (RisexDataClientConfig, Requests, Arc<Mutex<Value>>) {
     let requests = Requests::default();
+    let markets = Arc::new(Mutex::new(serde_json::from_str::<Value>(MARKETS).unwrap()));
+    let served = markets.clone();
     let app = Router::new()
         .route(
             "/v1/markets",
-            get(|| async { Json(serde_json::from_str::<Value>(MARKETS).unwrap()) }),
+            get(move || async move { Json(served.lock().unwrap().clone()) }),
+        )
+        .route(
+            "/v1/system/config",
+            get(|| async { Json(serde_json::from_str::<Value>(SYSTEM_CONFIG).unwrap()) }),
         )
         .route(
             "/v1/orderbook",
@@ -115,9 +126,10 @@ async fn start_venue() -> (RisexDataClientConfig, Requests) {
     let config = RisexDataClientConfig {
         base_url_http: Some(format!("http://{addr}")),
         base_url_ws: Some(format!("ws://{addr}/ws")),
+        instrument_status_poll_interval_secs: 1,
         ..Default::default()
     };
-    (config, requests)
+    (config, requests, markets)
 }
 
 async fn next_event(events: &mut UnboundedReceiver<DataEvent>) -> DataEvent {
@@ -154,7 +166,7 @@ async fn wait_for_requests(requests: &Requests, count: usize) -> Vec<(String, St
 
 #[tokio::test]
 async fn connect_subscribe_desync_resubscribe_request_and_disconnect() {
-    let (config, requests) = start_venue().await;
+    let (config, requests, _) = start_venue().await;
     let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
     replace_data_event_sender(sender);
     let client_id = ClientId::from("RISEX");
@@ -244,4 +256,55 @@ async fn connect_subscribe_desync_resubscribe_request_and_disconnect() {
 
     client.disconnect().await.unwrap();
     assert!(client.is_disconnected());
+}
+
+#[tokio::test]
+async fn instrument_status_is_sent_on_subscribe_and_on_change() {
+    let (config, _, markets) = start_venue().await;
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    replace_data_event_sender(sender);
+    let client_id = ClientId::from("RISEX");
+    let aero = InstrumentId::from("AERO-USDC-PERP.RISEX");
+    let mut client = RisexDataClient::new(client_id, config).unwrap();
+    client.connect().await.unwrap();
+    for _ in 0..53 {
+        next_event(&mut events).await;
+    }
+
+    client
+        .subscribe_instrument_status(SubscribeInstrumentStatus::new(
+            aero,
+            Some(client_id),
+            None,
+            UUID4::new(),
+            UnixNanos::default(),
+            None,
+            None,
+        ))
+        .unwrap();
+    let DataEvent::Data(Data::InstrumentStatus(status)) = next_event(&mut events).await else {
+        panic!("expected the current status");
+    };
+    assert_eq!(status.instrument_id, aero);
+    assert_eq!(status.action, MarketStatusAction::Trading);
+    assert_eq!(status.reason, None);
+    assert_eq!(status.is_trading, Some(true));
+
+    // Hand-made change: the recorded AERO market is never post-only. Polls that see no
+    // change in between send nothing, so the next event is the change.
+    {
+        let mut body = markets.lock().unwrap();
+        let rows = body["data"]["markets"].as_array_mut().unwrap();
+        let row = rows.iter_mut().find(|m| m["market_id"] == "15").unwrap();
+        row["post_only"] = json!(true);
+    }
+    let DataEvent::Data(Data::InstrumentStatus(status)) = next_event(&mut events).await else {
+        panic!("expected the changed status");
+    };
+    assert_eq!(status.action, MarketStatusAction::Pause);
+    assert_eq!(status.reason.unwrap().as_str(), "post_only");
+    assert_eq!(status.is_trading, Some(false));
+    assert_eq!(status.is_quoting, Some(true));
+
+    client.disconnect().await.unwrap();
 }

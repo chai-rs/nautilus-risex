@@ -106,7 +106,7 @@ pub(crate) mod testing {
     use super::RisexSigner;
 
     /// First Anvil/Hardhat key: public test key, never funded on a real network.
-    const KEY: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+    pub const KEY: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
     pub const A0: Address = address!("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266");
     pub const A1: Address = address!("0x70997970C51812dc3A010C7d01b50e0d17dc79C8");
     pub const ANCHOR: u64 = 2_527_069;

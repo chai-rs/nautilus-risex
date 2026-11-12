@@ -48,6 +48,7 @@ fn configs_construct_from_python(module: &Bound<'_, PyModule>) {
         .unwrap();
     assert_eq!(data.environment, RisexEnvironment::Mainnet);
     assert_eq!(data.http_timeout_secs, 10);
+    assert_eq!(data.instrument_status_poll_interval_secs, 60);
 
     let aero = || Py::new(py, InstrumentId::from(AERO)).unwrap();
     let exec_class = module.getattr("RisexExecClientConfig").unwrap();

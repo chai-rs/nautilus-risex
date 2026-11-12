@@ -2,6 +2,7 @@
 //!
 //! One WebSocket feeds books, quotes, trades, mark and index prices and funding rates.
 //! The venue has no bar channel: every bar subscription polls REST once per bar close.
+//! Instrument status has no channel either: it is polled while one is subscribed.
 
 use std::{future::Future, sync::Arc, time::Duration};
 
@@ -19,11 +20,11 @@ use nautilus_common::{
             InstrumentsResponse, RequestBars, RequestBookSnapshot, RequestFundingRates,
             RequestInstrument, RequestInstruments, RequestTrades, SubscribeBars,
             SubscribeBookDeltas, SubscribeBookDepth, SubscribeFundingRates, SubscribeIndexPrices,
-            SubscribeInstrument, SubscribeInstruments, SubscribeMarkPrices, SubscribeQuotes,
-            SubscribeTrades, TradesResponse, UnsubscribeBars, UnsubscribeBookDeltas,
-            UnsubscribeBookDepth, UnsubscribeFundingRates, UnsubscribeIndexPrices,
-            UnsubscribeInstrument, UnsubscribeInstruments, UnsubscribeMarkPrices,
-            UnsubscribeQuotes, UnsubscribeTrades,
+            SubscribeInstrument, SubscribeInstrumentStatus, SubscribeInstruments,
+            SubscribeMarkPrices, SubscribeQuotes, SubscribeTrades, TradesResponse, UnsubscribeBars,
+            UnsubscribeBookDeltas, UnsubscribeBookDepth, UnsubscribeFundingRates,
+            UnsubscribeIndexPrices, UnsubscribeInstrument, UnsubscribeInstrumentStatus,
+            UnsubscribeInstruments, UnsubscribeMarkPrices, UnsubscribeQuotes, UnsubscribeTrades,
         },
     },
 };
@@ -33,13 +34,14 @@ use nautilus_core::{
     time::{AtomicTime, get_atomic_clock_realtime},
 };
 use nautilus_model::{
-    data::{BarType, BookOrder, Data},
-    enums::{BookType, OrderSide},
+    data::{BarType, BookOrder, Data, InstrumentStatus},
+    enums::{BookType, MarketStatusAction, OrderSide},
     identifiers::{ClientId, InstrumentId, Venue},
     instruments::{Instrument, InstrumentAny},
     orderbook::OrderBook,
 };
 use tokio::{sync::mpsc::UnboundedReceiver, task::JoinHandle};
+use ustr::Ustr;
 
 use crate::{
     book::{
@@ -52,7 +54,10 @@ use crate::{
         urls::risex_ws_url,
     },
     config::data::RisexDataClientConfig,
-    http::client::RisexHttpClient,
+    http::{
+        client::RisexHttpClient,
+        parse::{MarketStatus, parse_market_status},
+    },
     websocket::{
         RisexWebSocketClient, RisexWsChannel, RisexWsError, RisexWsMessage,
         handler::{FeedEvent, FeedHandler},
@@ -123,6 +128,8 @@ struct Feed {
     handler: Arc<parking_lot::Mutex<FeedHandler>>,
     instruments: Arc<DashMap<InstrumentId, InstrumentAny>>,
     subscriptions: Arc<DashSet<(Kind, InstrumentId)>>,
+    /// The status last sent for each instrument whose status is subscribed.
+    statuses: Arc<DashMap<InstrumentId, Option<MarketStatus>>>,
     sender: EventSender<DataEvent>,
     clock: &'static AtomicTime,
 }
@@ -305,6 +312,55 @@ impl Feed {
         }
     }
 
+    /// Reads the market flags and the maintenance state, and sends the status of each
+    /// subscribed instrument whose status is new or changed.
+    async fn poll_status(self) {
+        if self.statuses.is_empty() {
+            return;
+        }
+        // shortcut: a change shows after up to one poll interval, plus the 5 minutes the venue
+        // caches `/v1/markets`; read the WS `system` channel if maintenance must show at once.
+        let raw = self.http.raw();
+        let (markets, system) =
+            match tokio::try_join!(raw.get_markets(&[]), raw.get_system_config()) {
+                Ok((markets, system)) => (markets.markets, system),
+                Err(e) => {
+                    log::warn!("RISEx instrument status poll failed: {e}");
+                    return;
+                }
+            };
+        let maintenance = system.is_maintenance_mode || system.maintenance_phase == "active";
+        let registry = self.http.market_registry();
+        let ts = self.clock.get_time_ns();
+        for market in &markets {
+            let Some(instrument_id) = registry.instrument_id(market.market_id) else {
+                continue;
+            };
+            let Some(mut last) = self.statuses.get_mut(&instrument_id) else {
+                continue;
+            };
+            let status = parse_market_status(market, maintenance);
+            if *last == Some(status) {
+                continue;
+            }
+            *last = Some(status);
+            let (action, reason) = status;
+            let trading = action == MarketStatusAction::Trading;
+            self.send(Data::InstrumentStatus(InstrumentStatus::new(
+                instrument_id,
+                action,
+                ts,
+                ts,
+                reason.map(Ustr::from),
+                None,
+                Some(trading),
+                // A paused market still takes resting orders
+                Some(trading || action == MarketStatusAction::Pause),
+                None,
+            )));
+        }
+    }
+
     /// Disconnects the socket and forgets every subscription.
     async fn close(self, ws_url: String) {
         let mut ws = self.ws.lock().await;
@@ -312,6 +368,7 @@ impl Feed {
         // The client keeps its recorded subscriptions for the next connect: start a new one
         *ws = RisexWebSocketClient::new(ws_url);
         self.subscriptions.clear();
+        self.statuses.clear();
         self.handler.lock().clear();
     }
 }
@@ -323,6 +380,7 @@ pub struct RisexDataClient {
     config: RisexDataClientConfig,
     feed: Feed,
     feed_task: Option<JoinHandle<()>>,
+    status_task: Option<JoinHandle<()>>,
     bar_tasks: AHashMap<BarType, JoinHandle<()>>,
     close_task: Option<JoinHandle<()>>,
     is_connected: bool,
@@ -355,6 +413,7 @@ impl RisexDataClient {
             handler: Arc::new(parking_lot::Mutex::new(handler)),
             instruments,
             subscriptions: Arc::new(DashSet::new()),
+            statuses: Arc::new(DashMap::new()),
             sender: get_data_event_sender(),
             clock: get_atomic_clock_realtime(),
         };
@@ -364,6 +423,7 @@ impl RisexDataClient {
             config,
             feed,
             feed_task: None,
+            status_task: None,
             bar_tasks: AHashMap::new(),
             close_task: None,
             is_connected: false,
@@ -464,7 +524,10 @@ impl RisexDataClient {
     }
 
     fn abort_tasks(&mut self) {
-        if let Some(task) = self.feed_task.take() {
+        for task in [self.feed_task.take(), self.status_task.take()]
+            .into_iter()
+            .flatten()
+        {
             task.abort();
         }
         for (_, task) in self.bar_tasks.drain() {
@@ -568,6 +631,14 @@ impl DataClient for RisexDataClient {
             .await
             .context("failed to connect RISEx WebSocket")?;
         self.feed_task = Some(get_runtime().spawn(self.feed.clone().run(rx)));
+        let interval = Duration::from_secs(self.config.instrument_status_poll_interval_secs.max(1));
+        let feed = self.feed.clone();
+        self.status_task = Some(get_runtime().spawn(async move {
+            loop {
+                tokio::time::sleep(interval).await;
+                feed.clone().poll_status().await;
+            }
+        }));
         self.is_connected = true;
         log::info!(
             "Connected RISEx data client {}: {count} instruments",
@@ -598,6 +669,20 @@ impl DataClient for RisexDataClient {
             self.send_cached_instruments(Some(&instrument_id));
             Ok(())
         })
+    }
+
+    fn subscribe_instrument_status(
+        &mut self,
+        cmd: SubscribeInstrumentStatus,
+    ) -> anyhow::Result<()> {
+        let result = execute_instrument_subscriptions(&cmd.instrument_ids, |instrument_id| {
+            self.market_id(&instrument_id)?;
+            // Nothing sent yet: the poll below sends the current status
+            self.feed.statuses.insert(instrument_id, None);
+            Ok(())
+        });
+        get_runtime().spawn(self.feed.clone().poll_status());
+        result
     }
 
     fn subscribe_book_deltas(&mut self, cmd: SubscribeBookDeltas) -> anyhow::Result<()> {
@@ -658,6 +743,16 @@ impl DataClient for RisexDataClient {
     }
 
     fn unsubscribe_instrument(&mut self, _cmd: &UnsubscribeInstrument) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn unsubscribe_instrument_status(
+        &mut self,
+        cmd: &UnsubscribeInstrumentStatus,
+    ) -> anyhow::Result<()> {
+        for instrument_id in &cmd.instrument_ids {
+            self.feed.statuses.remove(instrument_id);
+        }
         Ok(())
     }
 

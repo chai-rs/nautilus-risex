@@ -54,6 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .subscribe_mark_prices(true)
         .subscribe_index_prices(true)
         .subscribe_funding_rates(true)
+        .subscribe_instrument_status(true)
         .subscribe_bars(true)
         .subscribe_book_depth(true)
         // .request_instruments(true)

@@ -19,12 +19,14 @@ impl RisexDataClientConfig {
         base_url_http = None,
         base_url_ws = None,
         http_timeout_secs = None,
+        instrument_status_poll_interval_secs = None,
     ))]
     fn py_new(
         environment: Option<RisexEnvironment>,
         base_url_http: Option<String>,
         base_url_ws: Option<String>,
         http_timeout_secs: Option<u64>,
+        instrument_status_poll_interval_secs: Option<u64>,
     ) -> Self {
         let defaults = Self::default();
         Self {
@@ -32,6 +34,8 @@ impl RisexDataClientConfig {
             base_url_http,
             base_url_ws,
             http_timeout_secs: http_timeout_secs.unwrap_or(defaults.http_timeout_secs),
+            instrument_status_poll_interval_secs: instrument_status_poll_interval_secs
+                .unwrap_or(defaults.instrument_status_poll_interval_secs),
         }
     }
 
@@ -53,6 +57,11 @@ impl RisexDataClientConfig {
     #[getter]
     fn http_timeout_secs(&self) -> u64 {
         self.http_timeout_secs
+    }
+
+    #[getter]
+    fn instrument_status_poll_interval_secs(&self) -> u64 {
+        self.instrument_status_poll_interval_secs
     }
 
     fn __repr__(&self) -> String {

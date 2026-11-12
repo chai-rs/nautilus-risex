@@ -41,6 +41,13 @@ cargo run --example exec_tester --features examples
 cargo bench --bench signing
 ```
 
+`cargo test` also runs the offline tests of the binaries: the plan and the closing order of
+`risex-flatten`, the rows of `risex-trades-probe`, and the request body of
+`risex-signer-revoke` (in `src/execution/revoke.rs`). They use the fixtures and no network.
+
+`data_tester` subscribes to the book, quotes, trades, mark and index prices, funding rates,
+instrument status and 1-minute bars of AERO and BTC.
+
 `data_tester` and `risex-trades-probe` read public mainnet data and use no key. `exec_tester`,
 `risex-flatten` and `risex-signer-revoke` need the environment variables below. Pass `testnet`
 as the first argument of the two binaries to target testnet.
@@ -80,7 +87,7 @@ config redacts the signer key.
 | Funding rate (live) | WS `expected_funding_rate` | Direct |
 | `request_funding_rates` | `funding-rate-history` | Direct |
 | Book recovery | CRC32 mismatch → unsubscribe, subscribe, bounded retries | Direct |
-| Instrument status | — | Not done |
+| Instrument status | Poll of `GET /v1/markets` and `GET /v1/system/config` | Direct, polled |
 | Spot markets | — | Not on venue |
 
 ### Orders
@@ -96,8 +103,8 @@ config redacts the signer key.
 | Modify | Cancel, then place | Emulated |
 | Batch submit, batch cancel | One request after the other | Emulated |
 | Cancel-all per instrument | `cancel-all` of the market; one cancel per order when a side is given | Direct / emulated |
-| Leverage, margin mode | Set at connect from the config | Direct, no runtime command |
-| OTO, OCO, OTOCO, bracket | Orders of a list go out in sequence, with no link | Not done |
+| Leverage, margin mode | Set at connect from the config; at run time with `update_leverage` and `update_margin_mode` of the execution client | Direct |
+| OTO, OCO, OTOCO, bracket | No group endpoint. Orders of a list go out in sequence, with no link | Not on venue; sent unlinked, not refused |
 | Dead man's switch | — | Not on venue |
 | Native batch, native modify, STP `reduce` | — | Not on venue |
 
@@ -109,7 +116,7 @@ config redacts the signer key.
 | Query account | `cross-margin-balance` + WS `account` | Direct |
 | Order, fill and position reports | REST, paged | Direct |
 | Live order and fill events | WS `orders`, `fills` with the `makers` filter | Direct, no WS auth |
-| Live position reports from the channel | — | Not done (REST only) |
+| Live position reports from the channel | WS `positions` with the `makers` filter | Direct, no WS auth |
 
 ### Around the adapter
 
@@ -140,6 +147,16 @@ config redacts the signer key.
 - **Market orders** need a quote of the instrument in the cache. Subscribe to quotes first.
 - **TP/SL orders** are polled (`GET /v1/orders/tpsl`), not pushed. The default interval is in
   `RisexExecClientConfig::tpsl_poll_interval_secs`.
+- **Instrument status** is polled while one is subscribed, every
+  `RisexDataClientConfig::instrument_status_poll_interval_secs` (default 60). The venue caches
+  the markets for 5 minutes, so a market flag can show that late.
+- **`update_leverage` and `update_margin_mode`** send the request in the background. A refusal
+  of the venue goes to the log, not to the caller.
+- **Order lists** have no link on the venue. Each child goes out at once, and nothing cancels
+  the other leg of an OCO pair. Set an `emulation_trigger` on the child orders to let the
+  Nautilus order emulator hold them; this crate has no test of that route.
+- **Position reports from the channel** stop if the venue starts to require WS auth for
+  `positions`. The client logs the refusal and continues with the REST reports.
 
 ## Python
 
@@ -158,9 +175,12 @@ cargo test --features python --test python --config 'patch.crates-io.pyo3-stub-g
 With the patch, the feature compiles, clippy is clean, and the test passes (10 Nov 2026, patch
 from commit `d53849b216e20f2c122ca01b4dd0da377638b186`).
 
-Not confirmed: a wheel that a Python `TradingNode` can load. This crate has no `cdylib` target,
-and a separate extension module has its own copy of the Nautilus registry. Use the Rust
-`LiveNode` (see `examples/`).
+A wheel built from this crate alone cannot give its factories to the `LiveNode` of an installed
+`nautilus_trader`. The factory registry, the event senders and the runtime are Rust statics, and
+each compiled extension has its own copy. The adapter must be compiled into one extension module
+together with `nautilus-live`; this crate has no `cdylib` target for that. `docs/STATUS.md`
+("Python") has the evidence and the list of what such a build needs. Nothing was built to
+confirm it. Use the Rust `LiveNode` (see `examples/`).
 
 ## Fuzz
 
@@ -169,6 +189,9 @@ The `fuzz/` crate needs a nightly toolchain and `cargo-fuzz`:
 ```bash
 cargo +nightly fuzz run pack_order
 ```
+
+The `fuzz` job of the CI workflow installs both on the runner and runs each target for 30
+seconds. The `check` job runs clippy and the tests with and without `--features examples`.
 
 ## License
 

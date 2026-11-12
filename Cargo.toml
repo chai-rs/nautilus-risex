@@ -84,7 +84,6 @@ nautilus-testkit = { version = "=0.67.0", default-features = false, features = [
 [[bin]]
 name = "risex-trades-probe"
 path = "bin/trades_probe.rs"
-test = false
 doc = false
 
 [[example]]
@@ -96,7 +95,6 @@ required-features = ["examples"]
 [[bin]]
 name = "risex-flatten"
 path = "bin/flatten.rs"
-test = false
 doc = false
 
 [[bin]]

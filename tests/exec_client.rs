@@ -48,7 +48,7 @@ use nautilus_core::{UUID4, UnixNanos};
 use nautilus_live::ExecutionClientCore;
 use nautilus_model::{
     data::QuoteTick,
-    enums::{AccountType, LiquiditySide, OmsType, OrderSide, OrderType},
+    enums::{AccountType, LiquiditySide, OmsType, OrderSide, OrderType, PositionSide},
     events::{AccountState, OrderEventAny},
     identifiers::{ClientId, ClientOrderId, InstrumentId, TraderId, VenueOrderId},
     orders::{Order, OrderAny, OrderTestBuilder},
@@ -220,6 +220,7 @@ struct VenueState {
     reject_place: Option<(&'static str, &'static str)>,
     stale_nonce_once: bool,
     refuse_subscriptions: bool,
+    refuse_positions: bool,
     /// Replaces the trades of `GET /v1/trade-history`.
     trades: Option<Value>,
     /// The order of `GET /v1/orders/by-id/{id}`; 404 without it.
@@ -475,7 +476,12 @@ impl Venue {
                         .as_object_mut()
                         .and_then(|params| params.remove("channel"))
                         .unwrap_or_default();
-                    let ack = if self.state.lock().refuse_subscriptions {
+                    let refused = {
+                        let state = self.state.lock();
+                        state.refuse_subscriptions
+                            || (state.refuse_positions && channel == "positions")
+                    };
+                    let ack = if refused {
                         json!({"type": "subscribed", "method": "subscribe", "status": "error", "message": "Failed to subscribe: unauthorized", "channel": channel, "data": {}})
                     } else {
                         json!({"type": "subscribed", "method": "subscribe", "status": "success", "message": "ok", "channel": channel, "data": filter})
@@ -674,7 +680,7 @@ impl Harness {
         let ExecutionEvent::Account(rest_account) = next_event(&mut events).await else {
             panic!("expected the account state of the REST read");
         };
-        venue.wait_subscriptions(3).await;
+        venue.wait_subscriptions(4).await;
         Self {
             venue,
             client,
@@ -1220,4 +1226,71 @@ async fn reconciliation_reports_come_from_the_rest_fixtures() {
         .await
         .unwrap();
     assert_eq!(report.unwrap().venue_order_id, id);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn position_reports_come_from_the_positions_channel() {
+    let mut h = Harness::connect().await;
+
+    // Recorded: the BTC position of the account after a fill.
+    let mut frame = ws_fixture("positions");
+    h.venue.push(&frame);
+    let ExecutionEvent::Report(ExecutionReport::Position(report)) = next_event(&mut h.events).await
+    else {
+        panic!("expected a position report");
+    };
+    assert_eq!(report.instrument_id.to_string(), "BTC-USDC-PERP.RISEX");
+    assert_eq!(report.position_side, PositionSide::Long);
+    assert_eq!(report.quantity, Quantity::from("4.207594"));
+
+    // Hand-made from the docs: a closed position has size "0" and keeps its side.
+    frame["data"][0]["size"] = json!("0");
+    // The position of another account on the same frame is not reported.
+    let mut other = frame["data"][0].clone();
+    other["account"] = json!("0x0000000000000000000000000000000000000001");
+    other["size"] = json!("7");
+    frame["data"].as_array_mut().unwrap().insert(0, other);
+    h.venue.push(&frame);
+    let ExecutionEvent::Report(ExecutionReport::Position(report)) = next_event(&mut h.events).await
+    else {
+        panic!("expected a position report");
+    };
+    assert_eq!(report.position_side, PositionSide::Flat);
+    h.assert_no_pending_events().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn refused_positions_subscription_keeps_the_client_connected() {
+    let mut h = Harness::connect_with(|_, venue| venue.state.lock().refuse_positions = true).await;
+
+    // The refusal was read before this frame: the client still consumes the socket.
+    h.assert_no_pending_events().await;
+    assert!(h.client.is_connected());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn leverage_and_margin_mode_can_be_set_at_run_time() {
+    let h = Harness::connect().await;
+
+    h.client
+        .update_margin_mode(aero(), RisexMarginMode::Isolated)
+        .unwrap();
+    let sent = h.venue.wait_posts("/v1/account/margin-mode", 1).await;
+    assert_eq!(sent[0]["market_id"], "15");
+    assert_eq!(sent[0]["margin_mode"], 1);
+
+    h.client.update_leverage(aero(), 3).unwrap();
+    let sent = h.venue.wait_posts("/v1/account/leverage", 1).await;
+    assert_eq!(sent[0]["market_id"], "15");
+    assert_eq!(sent[0]["leverage"], "3");
+
+    assert!(h.client.update_leverage(aero(), 0).is_err());
+    let unknown = InstrumentId::from("NOPE-USDC-PERP.RISEX");
+    assert!(h.client.update_leverage(unknown, 3).is_err());
+    assert!(
+        h.client
+            .update_margin_mode(unknown, RisexMarginMode::Cross)
+            .is_err()
+    );
+    assert_eq!(h.venue.state.lock().posts.len(), 2);
 }

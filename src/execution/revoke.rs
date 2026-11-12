@@ -10,8 +10,14 @@ use zeroize::Zeroizing;
 
 use crate::{
     common::{consts::HTTP_TIMEOUT_SECS, credential::RisexCredential, enums::RisexEnvironment},
-    http::{client::RisexRawHttpClient, models::RisexRevokeSignerRequest},
-    signing::{RisexSigner, nonce::NonceManager},
+    http::{
+        client::RisexRawHttpClient,
+        models::{RisexEip712Domain, RisexRevokeSignerRequest},
+    },
+    signing::{
+        RisexSigner,
+        nonce::{Nonce, NonceManager},
+    },
 };
 
 /// A signer revocation that is resolved from the environment and not sent yet.
@@ -93,39 +99,48 @@ impl SignerRevocation {
     ///
     /// Returns an error if a request fails or the venue does not confirm.
     pub async fn submit(self) -> anyhow::Result<()> {
-        let account = self.account.to_string();
         let domain = self.raw.get_eip712_domain().await?;
-        let verifying_contract: Address = domain
-            .verifying_contract
-            .parse()
-            .context("invalid verifying contract")?;
-        let nonce_state = self.raw.get_nonce_state(&account).await?;
+        let nonce_state = self.raw.get_nonce_state(&self.account.to_string()).await?;
         let nonces = NonceManager::new(nonce_state.nonce_anchor);
         nonces.resync(nonce_state.nonce_anchor, nonce_state.current_bitmap_index);
         let lease = nonces.next().await?;
 
-        // unverified: the body shape and the signature were never sent to the venue.
-        let account_signature = RisexSigner::new(
-            self.account_key,
-            &domain.name,
-            &domain.version,
-            domain.chain_id,
-            verifying_contract,
-        )
-        .revoke_signer(self.signer, lease.nonce)?;
-        let response = self
-            .raw
-            .revoke_signer(&RisexRevokeSignerRequest {
-                account,
-                signer: self.signer.to_string(),
-                nonce_anchor: lease.nonce.anchor.to_string(),
-                nonce_bitmap_index: lease.nonce.index,
-                account_signature,
-            })
-            .await?;
+        let request = revoke_request(self.account_key, self.signer, &domain, lease.nonce)?;
+        let response = self.raw.revoke_signer(&request).await?;
         anyhow::ensure!(response.success, "the venue did not confirm the revocation");
         Ok(())
     }
+}
+
+/// Body of `POST /v1/auth/revoke-signer` for `signer`, signed with the account key.
+fn revoke_request(
+    account_key: PrivateKeySigner,
+    signer: Address,
+    domain: &RisexEip712Domain,
+    nonce: Nonce,
+) -> anyhow::Result<RisexRevokeSignerRequest> {
+    let verifying_contract: Address = domain
+        .verifying_contract
+        .parse()
+        .context("invalid verifying contract")?;
+    let account = account_key.address().to_string();
+
+    // unverified: the body shape and the signature were never sent to the venue.
+    let account_signature = RisexSigner::new(
+        account_key,
+        &domain.name,
+        &domain.version,
+        domain.chain_id,
+        verifying_contract,
+    )
+    .revoke_signer(signer, nonce)?;
+    Ok(RisexRevokeSignerRequest {
+        account,
+        signer: signer.to_string(),
+        nonce_anchor: nonce.anchor.to_string(),
+        nonce_bitmap_index: nonce.index,
+        account_signature,
+    })
 }
 
 // Manual impl so the account key can never reach logs.
@@ -135,5 +150,52 @@ impl fmt::Debug for SignerRevocation {
             .field("account", &self.account)
             .field("signer", &self.signer)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        http::models::tests::fixture,
+        signing::testing::{A0, A1, ANCHOR, KEY, assert_recovers_hex},
+    };
+
+    #[test]
+    fn request_body_is_signed_by_the_account_key() {
+        // The recorded domain is the domain of the Python reference digest.
+        let domain: RisexEip712Domain = fixture("eip712_domain");
+        let nonce = Nonce {
+            anchor: ANCHOR,
+            index: 4,
+        };
+        let request = revoke_request(KEY.parse().unwrap(), A1, &domain, nonce).unwrap();
+
+        assert_eq!(request.account, A0.to_string());
+        assert_eq!(request.signer, A1.to_string());
+        assert_recovers_hex(&request.account_signature, "revoke_signer");
+        let body = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "account": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+                "signer": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+                "nonce_anchor": "2527069",
+                "nonce_bitmap_index": 4,
+                "account_signature": request.account_signature,
+            })
+        );
+    }
+
+    #[test]
+    fn invalid_verifying_contract_is_an_error() {
+        let mut domain: RisexEip712Domain = fixture("eip712_domain");
+        domain.verifying_contract = "0x12".to_string();
+        let nonce = Nonce {
+            anchor: ANCHOR,
+            index: 4,
+        };
+        let e = revoke_request(KEY.parse().unwrap(), A1, &domain, nonce).unwrap_err();
+        assert_eq!(e.to_string(), "invalid verifying contract");
     }
 }

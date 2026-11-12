@@ -3,7 +3,7 @@
 use nautilus_core::UnixNanos;
 use nautilus_model::{
     data::{Bar, BarType, FundingRateUpdate, TradeTick},
-    enums::{OrderStatus, OrderType, PositionSide},
+    enums::{MarketStatusAction, OrderStatus, OrderType, PositionSide},
     identifiers::{AccountId, Symbol, VenueOrderId},
     instruments::{CryptoPerpetual, Instrument, InstrumentAny},
     reports::{FillReport, OrderStatusReport, PositionStatusReport},
@@ -77,6 +77,31 @@ pub fn parse_instrument(market: &RisexMarket, ts_init: UnixNanos) -> anyhow::Res
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     Ok(InstrumentAny::CryptoPerpetual(instrument))
+}
+
+/// The trading state of a market: an action and its reason. No reason is normal trading.
+pub type MarketStatus = (MarketStatusAction, Option<&'static str>);
+
+/// Reads the trading state of a market from its flags. `maintenance` is the venue-wide
+/// state of `GET /v1/system/config`.
+// unverified: the meaning of each flag follows the docs. The recorded markets show only
+// normal, post-only and inactive ones.
+#[must_use]
+pub fn parse_market_status(market: &RisexMarket, maintenance: bool) -> MarketStatus {
+    if !market.active {
+        (MarketStatusAction::NotAvailableForTrading, Some("inactive"))
+    } else if !market.config.unlocked {
+        (MarketStatusAction::Halt, Some("locked"))
+    } else if maintenance {
+        // Maintenance is a venue-wide post-only mode: resting orders and cancels only.
+        (MarketStatusAction::Pause, Some("maintenance"))
+    } else if market.post_only {
+        (MarketStatusAction::Pause, Some("post_only"))
+    } else if market.reduce_only {
+        (MarketStatusAction::Trading, Some("reduce_only"))
+    } else {
+        (MarketStatusAction::Trading, None)
+    }
 }
 
 /// Parses a public trade.
@@ -505,6 +530,32 @@ pub(crate) mod tests {
         assert_eq!(btc.price_increment(), Price::from("0.1"));
         assert_eq!(btc.size_increment(), Quantity::from("0.000001"));
         assert_eq!(btc.margin_init(), dec!(0.02));
+    }
+
+    #[rstest]
+    fn test_parse_market_status() {
+        let markets = fixture::<RisexMarkets>("markets").markets;
+        let count = |status| {
+            let found = markets
+                .iter()
+                .filter(|m| parse_market_status(m, false) == status);
+            found.count()
+        };
+        assert_eq!(count((MarketStatusAction::Trading, None)), 52);
+        assert_eq!(count((MarketStatusAction::Pause, Some("post_only"))), 1);
+        let inactive = (MarketStatusAction::NotAvailableForTrading, Some("inactive"));
+        assert_eq!(count(inactive), 1);
+
+        // Hand-made: no recorded market is locked, reduce-only or in maintenance.
+        let mut btc = markets.iter().find(|m| m.market_id == 1).unwrap().clone();
+        let paused = (MarketStatusAction::Pause, Some("maintenance"));
+        assert_eq!(parse_market_status(&btc, true), paused);
+        btc.reduce_only = true;
+        let reduce_only = (MarketStatusAction::Trading, Some("reduce_only"));
+        assert_eq!(parse_market_status(&btc, false), reduce_only);
+        btc.config.unlocked = false;
+        let locked = (MarketStatusAction::Halt, Some("locked"));
+        assert_eq!(parse_market_status(&btc, true), locked);
     }
 
     #[rstest]

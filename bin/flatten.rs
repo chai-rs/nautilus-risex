@@ -19,7 +19,7 @@
 
 use std::{
     collections::{BTreeSet, HashMap},
-    env,
+    env, fmt,
     io::{BufRead, Write},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -42,9 +42,11 @@ use nautilus_risex::{
     execution::{order::close_order, session::RisexSession},
     http::{
         client::{RisexHttpClient, RisexRawHttpClient},
-        models::RisexPosition,
+        models::{RisexOpenOrder, RisexPosition, RisexTpslOrder},
+        parse::RisexBookSnapshot,
         query::{RisexOpenOrdersQuery, RisexPositionsQuery, RisexTpslOrdersQuery},
     },
+    signing::action::PlaceOrder,
 };
 
 #[tokio::main]
@@ -71,23 +73,18 @@ async fn main() -> anyhow::Result<()> {
         .collect();
     let raw = http.raw();
 
-    let order_markets = open_order_markets(raw, &account).await?;
-    let tpsl_markets = tpsl_markets(raw, &account).await?;
-    let positions = open_positions(raw, &account).await?;
+    let plan = Plan::new(
+        &open_orders(raw, &account).await?,
+        &tpsl_orders(raw, &account).await?,
+        open_positions(raw, &account).await?,
+    );
 
     println!();
     println!("RISEx flatten");
     println!("  environment        : {environment:?}");
     println!("  account            : {account}");
-    println!("  cancel all orders  : markets {order_markets:?}");
-    println!("  cancel all TP/SL   : markets {tpsl_markets:?}");
-    for position in &positions {
-        println!(
-            "  close position     : market {} {} {}",
-            position.market_id, position.side, position.size
-        );
-    }
-    if order_markets.is_empty() && tpsl_markets.is_empty() && positions.is_empty() {
+    print!("{plan}");
+    if plan.is_empty() {
         println!("Nothing to do.");
         return Ok(());
     }
@@ -107,21 +104,21 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Orders go first: a resting order can block a reduce-only close.
-    for market_id in order_markets {
+    for market_id in plan.order_markets {
         let result = session.cancel_all_orders(market_id).await;
         report(
             format!("cancel all orders, market {market_id}"),
             result.map(|()| String::new()).map_err(Into::into),
         );
     }
-    for market_id in tpsl_markets {
+    for market_id in plan.tpsl_markets {
         let result = session.cancel_all_tpsl(market_id).await;
         report(
             format!("cancel all TP/SL, market {market_id}"),
             result.map(|()| String::new()).map_err(Into::into),
         );
     }
-    for position in &positions {
+    for position in &plan.positions {
         let result = close(
             &http,
             &session,
@@ -146,43 +143,88 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn open_order_markets(
+/// What one run sends: built from the account state, printed, then sent after Enter.
+struct Plan {
+    /// Markets with an open order: one cancel-all each.
+    order_markets: BTreeSet<u16>,
+    /// Markets with a waiting TP/SL order: one TP/SL cancel-all each.
+    tpsl_markets: BTreeSet<u16>,
+    /// Positions to close, one reduce-only IOC order each.
+    positions: Vec<RisexPosition>,
+}
+
+impl Plan {
+    fn new(
+        orders: &[RisexOpenOrder],
+        tpsl: &[RisexTpslOrder],
+        mut positions: Vec<RisexPosition>,
+    ) -> Self {
+        positions.retain(|position| !position.size.is_zero());
+        Self {
+            order_markets: orders.iter().map(|order| order.market_id).collect(),
+            tpsl_markets: tpsl.iter().map(|order| order.market_id).collect(),
+            positions,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.order_markets.is_empty() && self.tpsl_markets.is_empty() && self.positions.is_empty()
+    }
+}
+
+impl fmt::Display for Plan {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "  cancel all orders  : markets {:?}", self.order_markets)?;
+        writeln!(f, "  cancel all TP/SL   : markets {:?}", self.tpsl_markets)?;
+        for position in &self.positions {
+            writeln!(
+                f,
+                "  close position     : market {} {} {}",
+                position.market_id, position.side, position.size
+            )?;
+        }
+        Ok(())
+    }
+}
+
+async fn open_orders(
     raw: &RisexRawHttpClient,
     account: &str,
-) -> anyhow::Result<BTreeSet<u16>> {
+) -> anyhow::Result<Vec<RisexOpenOrder>> {
     let mut query = RisexOpenOrdersQuery {
         account: account.to_string(),
         limit: Some(MAX_PAGE_LIMIT),
         ..Default::default()
     };
-    let mut markets = BTreeSet::new();
-    let mut fetched = 0;
+    let mut orders = Vec::new();
     loop {
-        let orders = raw.get_open_orders(&query).await?.orders;
-        markets.extend(orders.iter().map(|order| order.market_id));
-        fetched += orders.len() as u64;
-        if orders.len() < MAX_PAGE_LIMIT as usize {
-            return Ok(markets);
+        let page = raw.get_open_orders(&query).await?.orders;
+        let last = page.len() < MAX_PAGE_LIMIT as usize;
+        orders.extend(page);
+        if last {
+            return Ok(orders);
         }
-        query.start_index = Some(fetched);
+        query.start_index = Some(orders.len() as u64);
     }
 }
 
-async fn tpsl_markets(raw: &RisexRawHttpClient, account: &str) -> anyhow::Result<BTreeSet<u16>> {
+async fn tpsl_orders(
+    raw: &RisexRawHttpClient,
+    account: &str,
+) -> anyhow::Result<Vec<RisexTpslOrder>> {
     let mut query = RisexTpslOrdersQuery {
         account: account.to_string(),
         statuses: vec![RisexTpslOrderStatus::Accepted],
         limit: Some(MAX_PAGE_LIMIT),
         ..Default::default()
     };
-    let mut markets = BTreeSet::new();
-    let mut fetched = 0;
+    let mut orders = Vec::new();
     loop {
         let page = raw.get_tpsl_orders(&query).await?;
-        markets.extend(page.orders.iter().map(|order| order.market_id));
-        fetched += page.orders.len() as u64;
-        if page.orders.is_empty() || fetched >= page.total {
-            return Ok(markets);
+        let empty = page.orders.is_empty();
+        orders.extend(page.orders);
+        if empty || orders.len() as u64 >= page.total {
+            return Ok(orders);
         }
         query.page = Some(page.page + 1);
     }
@@ -200,7 +242,7 @@ async fn open_positions(
     loop {
         let page = raw.get_positions(&query).await?;
         let last = !page.has_next_page || page.positions.is_empty();
-        positions.extend(page.positions.into_iter().filter(|p| !p.size.is_zero()));
+        positions.extend(page.positions);
         if last {
             return Ok(positions);
         }
@@ -219,6 +261,20 @@ async fn close(
         .get(&position.market_id)
         .context("market is not in the instrument list")?;
     let book = http.request_book_snapshot(instrument, Some(1)).await?;
+    // A new id per run: the venue may refuse a client order id it has seen.
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let order = closing_order(instrument, position, &book, slippage_bps, now)?;
+    Ok(session.place_order(&order).await?.order_id)
+}
+
+/// The reduce-only IOC order that closes `position` against the top of `book`.
+fn closing_order(
+    instrument: &InstrumentAny,
+    position: &RisexPosition,
+    book: &RisexBookSnapshot,
+    slippage_bps: u32,
+    now_secs: u64,
+) -> anyhow::Result<PlaceOrder> {
     let (Some(bid), Some(ask)) = (book.bids.first(), book.asks.first()) else {
         anyhow::bail!("book has no bid or no ask");
     };
@@ -231,16 +287,152 @@ async fn close(
         UnixNanos::default(),
         UnixNanos::default(),
     );
-    // A new id per run: the venue may refuse a client order id it has seen.
-    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    let order = close_order(
+    close_order(
         position.market_id,
         instrument,
         position.side,
         position.size,
         &quote,
         slippage_bps,
-        client_order_id_to_u64(&format!("FLATTEN-{}-{now}", position.market_id)),
-    )?;
-    Ok(session.place_order(&order).await?.order_id)
+        client_order_id_to_u64(&format!("FLATTEN-{}-{now_secs}", position.market_id)),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use nautilus_risex::{
+        common::enums::RisexOrderSide,
+        http::{
+            models::{
+                RisexMarkets, RisexOpenOrders, RisexOrderBook, RisexPositions, RisexResponse,
+                RisexTpslOrders,
+            },
+            parse::{parse_book_snapshot, parse_instrument},
+        },
+    };
+    use rust_decimal::Decimal;
+    use serde::de::DeserializeOwned;
+
+    use super::*;
+
+    const AERO: u16 = 15;
+    const NOW: u64 = 1_800_000_000;
+
+    /// Loads `tests/fixtures/http/{name}.json` and unwraps the envelope.
+    fn fixture<T: DeserializeOwned>(name: &str) -> T {
+        let path = format!(
+            "{}/tests/fixtures/http/{name}.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let json = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+        serde_json::from_str::<RisexResponse<T>>(&json)
+            .unwrap_or_else(|e| panic!("{path}: {e}"))
+            .data
+    }
+
+    fn positions() -> Vec<RisexPosition> {
+        fixture::<RisexPositions>("positions").positions
+    }
+
+    /// The AERO instrument, its recorded long position and its recorded book.
+    fn aero() -> (InstrumentAny, RisexPosition, RisexBookSnapshot) {
+        let markets = fixture::<RisexMarkets>("markets").markets;
+        let market = markets.iter().find(|m| m.market_id == AERO).unwrap();
+        let instrument = parse_instrument(market, UnixNanos::default()).unwrap();
+        let position = positions()
+            .into_iter()
+            .find(|p| p.market_id == AERO)
+            .unwrap();
+        let book =
+            parse_book_snapshot(&fixture::<RisexOrderBook>("orderbook_aero"), &instrument).unwrap();
+        (instrument, position, book)
+    }
+
+    #[test]
+    fn plan_of_the_recorded_account() {
+        let plan = Plan::new(
+            &fixture::<RisexOpenOrders>("orders_open").orders,
+            &fixture::<RisexTpslOrders>("tpsl_orders").orders,
+            positions(),
+        );
+
+        // 635 open orders: some in each market from 1 to 54, but none in 13.
+        let markets: BTreeSet<u16> = (1..=54).filter(|id| *id != 13).collect();
+        assert_eq!(plan.order_markets, markets);
+        assert_eq!(plan.tpsl_markets, BTreeSet::from([33]));
+        assert_eq!(plan.positions.len(), 53);
+        assert!(!plan.is_empty());
+
+        let text = plan.to_string();
+        assert_eq!(text.lines().count(), 2 + 53);
+        assert!(text.starts_with("  cancel all orders  : markets {1, 2, 3, "));
+        assert!(text.contains("\n  cancel all TP/SL   : markets {33}\n"));
+        assert!(text.contains("\n  close position     : market 15 BUY 99299\n"));
+    }
+
+    #[test]
+    fn flat_position_is_dropped_and_empty_plan_has_nothing_to_do() {
+        let mut positions = positions();
+        positions.truncate(2);
+        positions[0].size = Decimal::ZERO;
+        let kept = positions[1].market_id;
+
+        let plan = Plan::new(&[], &[], positions);
+        assert_eq!(plan.positions.len(), 1);
+        assert_eq!(plan.positions[0].market_id, kept);
+        assert!(!plan.is_empty());
+
+        let plan = Plan::new(&[], &[], Vec::new());
+        assert!(plan.is_empty());
+        assert_eq!(plan.to_string().lines().count(), 2);
+    }
+
+    #[test]
+    fn closing_order_of_a_long_and_of_a_short() {
+        let (instrument, mut position, book) = aero();
+        let id = client_order_id_to_u64("FLATTEN-15-1800000000");
+
+        // Long 99299 at bid 0.55296: sell, 50 bps under the bid, down to the tick.
+        let order = closing_order(&instrument, &position, &book, 50, NOW).unwrap();
+        let expected = PlaceOrder {
+            market_id: AERO,
+            size_steps: 99_299,
+            price_ticks: 55_019,
+            side: 1,
+            post_only: false,
+            reduce_only: true,
+            stp_mode: 0,
+            order_type: 1,
+            time_in_force: 3,
+            builder_id: 0,
+            client_order_id: id,
+            ttl_units: 0,
+        };
+        assert_eq!(order, expected);
+
+        // Short at ask 0.55313: buy, 50 bps over the ask, up to the tick.
+        position.side = RisexOrderSide::Sell;
+        position.size = -position.size;
+        let order = closing_order(&instrument, &position, &book, 50, NOW).unwrap();
+        assert_eq!(
+            order,
+            PlaceOrder {
+                price_ticks: 55_590,
+                side: 0,
+                ..expected
+            }
+        );
+
+        // A later run has another client order id.
+        let later = closing_order(&instrument, &position, &book, 50, NOW + 1).unwrap();
+        assert_ne!(later.client_order_id, id);
+    }
+
+    #[test]
+    fn closing_order_needs_both_sides_of_the_book() {
+        let (instrument, position, mut book) = aero();
+        book.asks.clear();
+        let e = closing_order(&instrument, &position, &book, 50, NOW).unwrap_err();
+        assert_eq!(e.to_string(), "book has no bid or no ask");
+    }
 }

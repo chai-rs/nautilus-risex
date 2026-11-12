@@ -1,8 +1,8 @@
 //! Live execution client.
 //!
 //! Commands are signed and sent over REST; order and fill events come from the
-//! `orders` and `fills` channels. Trigger orders (TP/SL) have no channel and
-//! are polled.
+//! `orders` and `fills` channels, position reports from the `positions` channel.
+//! Trigger orders (TP/SL) have no channel and are polled.
 
 pub mod order;
 pub mod revoke;
@@ -43,7 +43,7 @@ use crate::{
     common::{
         consts::MAX_PAGE_LIMIT,
         credential::RisexCredential,
-        enums::{RisexOrderStatus, RisexTpslOrderStatus},
+        enums::{RisexMarginMode, RisexOrderStatus, RisexTpslOrderStatus},
         parse::{RisexOrderId, client_order_id_to_u64},
         rate_limit::resolve_quota,
         urls::risex_ws_url,
@@ -65,8 +65,11 @@ use crate::{
     },
     signing::{action::PlaceOrder, tpsl::PlaceTpsl},
     websocket::{
-        account_state::parse_account_balance, client::RisexWebSocketClient,
-        dispatch::OrderDispatch, enums::RisexWsStatus, messages::RisexWsMessage,
+        account_state::{parse_account_balance, parse_position_status_report as parse_ws_position},
+        client::RisexWebSocketClient,
+        dispatch::OrderDispatch,
+        enums::RisexWsStatus,
+        messages::{RisexWsMessage, RisexWsPosition},
     },
 };
 
@@ -535,6 +538,23 @@ impl Shared {
         }
     }
 
+    /// Reports the positions of this account in a `positions` frame, snapshot or update.
+    fn report_positions(&self, positions: &[RisexWsPosition]) {
+        for position in positions {
+            if !position.account.eq_ignore_ascii_case(&self.account) {
+                continue;
+            }
+            let instrument = position.market_id.parse().ok();
+            let Some(instrument) = instrument.and_then(|id: u16| self.instruments.get(&id)) else {
+                continue;
+            };
+            match parse_ws_position(position, self.account_id, instrument, now()) {
+                Ok(report) => self.emitter.send_position_report(report),
+                Err(e) => log::warn!("RISEx positions row unreadable: {e}"),
+            }
+        }
+    }
+
     /// After a reconnect: what the channels did not deliver while the socket was down.
     async fn catch_up(&self) {
         match self.fill_reports(None, self.connected_ns, u64::MAX).await {
@@ -643,6 +663,14 @@ async fn consume(
                 }
                 Err(e) => log::warn!("RISEx account frame unreadable: {e}"),
             },
+            RisexWsMessage::Positions(frame) => shared.report_positions(&frame.data),
+            // Positions also come from REST at each reconciliation: carry on without the channel.
+            RisexWsMessage::Ack(ack)
+                if ack.status == RisexWsStatus::Error
+                    && ack.channel.as_deref() == Some("positions") =>
+            {
+                log::warn!("RISEx refused the positions subscription: {}", ack.message);
+            }
             RisexWsMessage::Ack(ack) if ack.status == RisexWsStatus::Error => {
                 // Without the account channels fills would be lost silently: stop instead.
                 log::error!(
@@ -802,6 +830,55 @@ impl RisexExecutionClient {
             price,
         })
     }
+
+    /// Sets the leverage of one market (`POST /v1/account/leverage`).
+    ///
+    /// Nautilus has no leverage command: strategy or bootstrap code calls this directly.
+    /// The request runs in the background and its outcome is logged.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the client is not connected, the instrument is not known or
+    /// `leverage` is zero.
+    pub fn update_leverage(&self, instrument_id: InstrumentId, leverage: u8) -> anyhow::Result<()> {
+        anyhow::ensure!(leverage > 0, "leverage must be at least 1");
+        let shared = self.shared()?;
+        let (market_id, _) = shared.market(&instrument_id)?;
+        spawn(async move {
+            match shared.session.update_leverage(market_id, leverage).await {
+                Ok(()) => log::info!("RISEx leverage of {instrument_id} set to {leverage}"),
+                Err(e) => log::error!("RISEx leverage update of {instrument_id} failed: {e}"),
+            }
+        });
+        Ok(())
+    }
+
+    /// Sets the margin mode of one market (`POST /v1/account/margin-mode`).
+    ///
+    /// The request runs in the background and its outcome is logged.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the client is not connected or the instrument is not known.
+    pub fn update_margin_mode(
+        &self,
+        instrument_id: InstrumentId,
+        margin_mode: RisexMarginMode,
+    ) -> anyhow::Result<()> {
+        let shared = self.shared()?;
+        let (market_id, _) = shared.market(&instrument_id)?;
+        spawn(async move {
+            match shared
+                .session
+                .update_margin_mode(market_id, margin_mode)
+                .await
+            {
+                Ok(()) => log::info!("RISEx margin mode of {instrument_id} set to {margin_mode:?}"),
+                Err(e) => log::error!("RISEx margin mode update of {instrument_id} failed: {e}"),
+            }
+        });
+        Ok(())
+    }
 }
 
 #[async_trait(?Send)]
@@ -930,6 +1007,7 @@ impl ExecutionClient for RisexExecutionClient {
         // (verified 10 Nov 2026). Add the auth request when the venue starts to refuse.
         ws.subscribe_orders(&market_ids, &shared.account).await?;
         ws.subscribe_fills(&market_ids, &shared.account).await?;
+        ws.subscribe_positions(&market_ids, &shared.account).await?;
         ws.subscribe_account(&shared.account).await?;
         let rx = ws.connect().await?;
 

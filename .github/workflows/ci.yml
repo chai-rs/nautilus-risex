@@ -13,4 +13,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --all-targets --features examples -- -D warnings
       - run: cargo test
+      - run: cargo test --features examples
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      # `+nightly` on each command: rust-toolchain.toml pins 1.99.1 for this directory.
+      - run: cargo +nightly install cargo-fuzz --locked
+      - name: Run each fuzz target for 30 seconds
+        run: |
+          for target in fuzz/fuzz_targets/*.rs; do
+            cargo +nightly fuzz run "$(basename "$target" .rs)" -- -max_total_time=30
+          done

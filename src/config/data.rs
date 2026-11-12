@@ -21,6 +21,9 @@ pub struct RisexDataClientConfig {
     /// Replaces the WebSocket URL of the environment.
     pub base_url_ws: Option<String>,
     pub http_timeout_secs: u64,
+    /// Poll interval of `GET /v1/markets` and `GET /v1/system/config` while an instrument
+    /// status is subscribed. The venue caches the markets for 5 minutes.
+    pub instrument_status_poll_interval_secs: u64,
 }
 
 impl Default for RisexDataClientConfig {
@@ -30,6 +33,7 @@ impl Default for RisexDataClientConfig {
             base_url_http: None,
             base_url_ws: None,
             http_timeout_secs: HTTP_TIMEOUT_SECS,
+            instrument_status_poll_interval_secs: 60,
         }
     }
 }
